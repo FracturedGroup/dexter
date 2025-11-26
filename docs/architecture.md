@@ -115,10 +115,10 @@ flowchart LR
     D -->|HTTP error / non-200| E["`Abort<br>(no changes)`"]
     D -->|HTTP 200 + JSON 'rates'| F[Parse rates]
 
-    F --> G[For each "`currency<br>RateRepository::upsert_rate()`"]
+    F --> G["`For each currency<br>RateRepository::upsert_rate()`"]
     G --> H[Ensure GBP→GBP row with rate=1.0]
 
-    H --> I[Admin UI reads "`rates<br>RateRepository::get_all_rates()`"]
+    H --> I["`Admin UI reads rates<br>RateRepository::get_all_rates()`"]
 ```
 
 **Key points:**
