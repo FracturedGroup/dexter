@@ -6,8 +6,6 @@ Dexter is a standalone WordPress plugin that provides a **central currency conve
 
 It lets vendors price products in their **native currencies** (EUR, CAD, AED, INR, etc.) while the Fractured storefront, orders, and commissions stay in **GBP**. Dexter performs all conversions **at import time** (e.g. via SyncSpider → WooCommerce REST), and stores full FX audit metadata for finance/compliance.
 
----
-
 ## Core responsibilities
 
 1. **FX rates storage & update**
