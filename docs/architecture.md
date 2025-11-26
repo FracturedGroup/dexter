@@ -149,8 +149,8 @@ flowchart TD
 
     D --> E["`Dexter Rest\PriceConverter::maybe_convert_prices()`"]
 
-    E --> E1["`Resolve vendor ID<br>from request: author, dokan_vendor_id, etc."`]
-    E1 --> "`|No vendor ID| F[Return product unchanged]`"
+    E --> E1["`Resolve vendor ID<br>from request: author, dokan_vendor_id, etc.`"]
+    E1 -->|No vendor ID| F[Return product unchanged]
 
     E1 -->"`|Vendor ID found|`" G["`Vendor\Currency::get_vendor_currency(vendor_id)`"]
     G --> H["`If currency == GBP<br>no FX conversion`"]
