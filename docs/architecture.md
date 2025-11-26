@@ -112,7 +112,7 @@ flowchart LR
     B --> C[Build request to frankfurter.app<br>base=GBP, to=EUR,CAD,AED,INR]
     C --> D["`wp_remote_get()`"]
 
-    D -->|HTTP error / non-200| E[Abort<br>(no changes)]
+    D -->|HTTP error / non-200| E["`Abort<br>(no changes)`"]
     D -->|HTTP 200 + JSON 'rates'| F[Parse rates]
 
     F --> G[For each "`currency<br>RateRepository::upsert_rate()`"]
