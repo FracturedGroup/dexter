@@ -147,28 +147,28 @@ flowchart TD
     B --> C[Build WC_Product / WC_Product_Variation]
     C --> D[Filter: woocommerce_rest_pre_insert_*]
 
-    D --> E[Dexter Rest\PriceConverter::maybe_convert_prices()]
+    D --> E["`Dexter Rest\PriceConverter::maybe_convert_prices()`"]
 
-    E --> E1[Resolve vendor ID<br>from request: author, dokan_vendor_id, etc.]
+    E --> E1["`Resolve vendor ID<br>from request: author, dokan_vendor_id, etc."`]
     E1 -->|No vendor ID| F[Return product unchanged]
 
-    E1 -->|Vendor ID found| G[Vendor\Currency::get_vendor_currency(vendor_id)]
-    G --> H[If currency == GBP<br>no FX conversion]
+    E1 -->|Vendor ID found| G["`Vendor\Currency::get_vendor_currency(vendor_id)`"]
+    G --> H["`If currency == GBP<br>no FX conversion`"]
 
     H --> H1[If prices present<br>store audit meta only]
-    H1 --> I[Return product (GBP as-is)]
+    H1 --> I["`Return product (GBP as-is)"`]
 
-    G -->|Non-GBP| J[Fx\RateRepository::get_rate_to_base(currency, GBP)]
+    G -->|Non-GBP| J["`Fx\RateRepository::get_rate_to_base(currency, GBP)`"]
     J -->|No rate| F[Return product unchanged]
 
-    J -->|Rate found| K[Read regular_price / sale_price<br>from REST request]
+    J -->|Rate found| K["`Read regular_price / sale_price<br>from REST request`"]
 
     K -->|No prices| F[Return product unchanged]
-    K -->|Prices present| L[Convert to GBP:<br>gbp = amount / rate]
+    K -->|Prices present| L["`Convert to GBP:<br>gbp = amount / rate`"]
 
-    L --> M[Set WC prices:<br>set_regular_price(), set_sale_price(), set_price()]
-    M --> N[Store audit meta:<br>_fxd_orig_*, _fxd_fx_rate_used, _fxd_fx_converted_at]
-    N --> O[Product/variation saved by Woo in GBP]
+    L --> M["`Set WC prices:<br>set_regular_price(), set_sale_price(), set_price()`"]
+    M --> N["`Store audit meta:<br>_fxd_orig_*, _fxd_fx_rate_used, _fxd_fx_converted_at`"]
+    N --> O["`Product/variation saved by Woo in GBP`"]
 
 ```
 
