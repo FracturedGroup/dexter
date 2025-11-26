@@ -13,8 +13,6 @@ It centralises:
 
 so that vendors can work in their own currencies while Fractured stays consistent in GBP for customers, reporting, VAT and payouts.
 
----
-
 ## 1. High-level components
 
 Dexter is structured into a few clear subsystems:
@@ -108,7 +106,7 @@ Dexter keeps its FX table up to date via:
 
 ```mermaid
 flowchart LR
-    A[WP Cron: daily] --> B[Dexter Fx\Updater::run()]
+    A[WP Cron: daily] --> B[Dexter Fx\\Updater::run()]
     A2[Admin clicks 'Refresh FX Rates Now'] --> B
 
     B --> C[Build request to frankfurter.app<br>base=GBP, to=EUR,CAD,AED,INR]
