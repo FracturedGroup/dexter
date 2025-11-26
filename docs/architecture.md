@@ -156,7 +156,7 @@ flowchart TD
     G --> H["`If currency == GBP<br>no FX conversion`"]
 
     H --> H1[If prices present<br>store audit meta only]
-    H1 --> I["`Return product (GBP as-is)"`]
+    H1 --> I["`Return product (GBP as-is)`"]
 
     G -->|Non-GBP| J["`Fx\RateRepository::get_rate_to_base(currency, GBP)`"]
     J -->|No rate| F[Return product unchanged]
