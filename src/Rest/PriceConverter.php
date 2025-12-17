@@ -95,6 +95,107 @@ final class PriceConverter {
     }
 
     /**
+     * Convert an already-saved WooCommerce product to GBP using the vendor's currency setting.
+     *
+     * This is used for integrations (e.g. SyncSpider) that insert products without using the
+     * WooCommerce REST insert hooks Dexter listens to.
+     *
+     * Assumes that the product's current prices are in the vendor's native currency.
+     *
+     * @param WC_Product $product
+     */
+    public static function convert_existing_product( WC_Product $product ): void {
+        $product_id = (int) $product->get_id();
+        if ( $product_id <= 0 ) {
+            return;
+        }
+
+        // Avoid double conversion.
+        $already = $product->get_meta( '_fxd_fx_converted_at', true );
+        if ( ! empty( $already ) ) {
+            return;
+        }
+
+        // Resolve vendor from the saved product's post_author.
+        $post = get_post( $product_id );
+        if ( ! $post || empty( $post->post_author ) ) {
+            return;
+        }
+
+        $vendor_id = (int) $post->post_author;
+        if ( $vendor_id <= 0 ) {
+            return;
+        }
+
+        $base_currency   = apply_filters( 'fractured_dexter_fx_base_currency', 'GBP' );
+        $vendor_currency = VendorCurrency::get_vendor_currency( $vendor_id );
+
+        // If vendor currency is base (GBP), nothing to convert.
+        if ( strtoupper( $vendor_currency ) === strtoupper( $base_currency ) ) {
+            // Store minimal audit meta only if prices exist (useful for traceability).
+            $regular = $product->get_regular_price();
+            $sale    = $product->get_sale_price();
+
+            if ( ( '' !== $regular && is_numeric( $regular ) ) || ( '' !== $sale && is_numeric( $sale ) ) ) {
+                if ( '' !== $regular && is_numeric( $regular ) ) {
+                    $product->update_meta_data( '_fxd_orig_regular_price', (string) $regular );
+                }
+                if ( '' !== $sale && is_numeric( $sale ) ) {
+                    $product->update_meta_data( '_fxd_orig_sale_price', (string) $sale );
+                }
+                self::store_common_audit_meta( $product, $vendor_currency, 1.0 );
+                $product->save();
+            }
+
+            return;
+        }
+
+        // Fetch FX rate for vendor_currency -> base_currency (GBP).
+        $rate = RateRepository::get_rate_to_base( $vendor_currency, $base_currency );
+        if ( null === $rate || $rate <= 0.0 ) {
+            return;
+        }
+
+        // Read existing prices (currently in vendor currency).
+        $regular = $product->get_regular_price();
+        $sale    = $product->get_sale_price();
+
+        $has_regular = ( '' !== $regular && null !== $regular && is_numeric( $regular ) );
+        $has_sale    = ( '' !== $sale && null !== $sale && is_numeric( $sale ) );
+
+        if ( ! $has_regular && ! $has_sale ) {
+            return;
+        }
+
+        // Convert and set GBP prices.
+        if ( $has_regular ) {
+            $orig_regular = (string) $regular;
+            $gbp_regular  = self::convert_to_gbp( (float) $regular, $rate );
+            $product->set_regular_price( $gbp_regular );
+            $product->update_meta_data( '_fxd_orig_regular_price', $orig_regular );
+        }
+
+        if ( $has_sale ) {
+            $orig_sale = (string) $sale;
+            $gbp_sale  = self::convert_to_gbp( (float) $sale, $rate );
+            $product->set_sale_price( $gbp_sale );
+            $product->update_meta_data( '_fxd_orig_sale_price', $orig_sale );
+        }
+
+        // Ensure the active price is aligned with WooCommerce logic.
+        $active_price = $product->get_sale_price() ?: $product->get_regular_price();
+        if ( '' !== $active_price && null !== $active_price ) {
+            $product->set_price( $active_price );
+        }
+
+        // Store shared audit metadata.
+        self::store_common_audit_meta( $product, $vendor_currency, $rate );
+
+        // Persist changes.
+        $product->save();
+    }
+
+    /**
      * Resolve the vendor (user) ID from the REST request and/or product.
      *
      * Tries, in order:

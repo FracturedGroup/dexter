@@ -6,6 +6,7 @@ use Fractured\Dexter\Admin\Menu as AdminMenu;
 use Fractured\Dexter\Fx\Updater as FxUpdater;
 use Fractured\Dexter\Vendor\Currency as VendorCurrency;
 use Fractured\Dexter\Rest\Hooks as RestHooks;
+use Fractured\Dexter\Integration\SyncSpider as SyncSpiderIntegration;
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -28,6 +29,9 @@ final class Plugin {
 
         // REST conversion layer.
         RestHooks::init();
+
+        // SyncSpider import integration (marker-based conversion on save).
+        SyncSpiderIntegration::init();
 
         // Admin UI.
         if ( is_admin() ) {
