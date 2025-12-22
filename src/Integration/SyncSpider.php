@@ -34,6 +34,7 @@ final class SyncSpider {
      */
     public static function init(): void {
         add_action( 'save_post_product', [ __CLASS__, 'maybe_convert_on_save' ], 20, 3 );
+        add_action( 'save_post_product_variation', [ __CLASS__, 'maybe_convert_on_save' ], 20, 3 );
     }
 
     /**
@@ -60,7 +61,11 @@ final class SyncSpider {
         }
 
         // Only act on product post type.
-        if ( 'product' !== $post->post_type ) {
+        //if ( 'product' !== $post->post_type ) {
+        //    return;
+        //}
+
+        if ( ! in_array( $post->post_type, [ 'product', 'product_variation' ], true ) ) {
             return;
         }
 
@@ -71,10 +76,11 @@ final class SyncSpider {
         }
 
         // Avoid double conversion: if already converted, do nothing.
-        $already = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
-        if ( ! empty( $already ) ) {
-            return;
-        }
+        // REMOVED TO LET UPDATE TASKS CONVERT PRICE
+        //$already = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
+        //if ( ! empty( $already ) ) {
+        //    return;
+        //}
 
         // Ensure WooCommerce is available.
         if ( ! function_exists( 'wc_get_product' ) ) {
