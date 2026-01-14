@@ -35,6 +35,10 @@ final class SyncSpider {
     public static function init(): void {
         add_action( 'save_post_product', [ __CLASS__, 'maybe_convert_on_save' ], 20, 3 );
         add_action( 'save_post_product_variation', [ __CLASS__, 'maybe_convert_on_save' ], 20, 3 );
+    
+        // Bulletproof: catches Woo REST create/update (including batch) reliably
+        add_action( 'woocommerce_rest_insert_product_object', [ __CLASS__, 'maybe_convert_on_rest' ], 20, 3 );
+        add_action( 'woocommerce_rest_insert_product_variation_object', [ __CLASS__, 'maybe_convert_on_rest' ], 20, 3 );
     }
 
     /**
@@ -59,6 +63,11 @@ final class SyncSpider {
         if ( 'trash' === $post->post_status ) {
             return;
         }
+        
+        // If this save is happening during a REST request, let the REST hook handle it.
+        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+            return;
+        }
 
         // Only act on product post type.
         //if ( 'product' !== $post->post_type ) {
@@ -76,7 +85,6 @@ final class SyncSpider {
         }
 
         // Avoid double conversion: if already converted, do nothing.
-        // REMOVED TO LET UPDATE TASKS CONVERT PRICE
         //$already = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
         //if ( ! empty( $already ) ) {
         //    return;
@@ -95,5 +103,48 @@ final class SyncSpider {
         // Convert "as-is" prices currently stored on the product.
         // (Step 3 will implement this method in PriceConverter.)
         PriceConverter::convert_existing_product( $product );
+    }
+    
+    
+    /**
+     * Convert prices after Woo REST insert/update.
+     *
+     * @param \WC_Data         $object
+     * @param \WP_REST_Request $request
+     * @param bool             $creating
+     */
+    public static function maybe_convert_on_rest( $object, $request, $creating ): void {
+        if ( ! $object instanceof \WC_Product && ! $object instanceof \WC_Product_Variation ) {
+            return;
+        }
+    
+        if ( ! $request instanceof \WP_REST_Request ) {
+            return;
+        }
+    
+        $post_id = (int) $object->get_id();
+        if ( $post_id <= 0 ) {
+            return;
+        }
+    
+        $source = get_post_meta( $post_id, self::META_SOURCE_KEY, true );
+        if ( self::META_SOURCE_VALUE !== (string) $source ) {
+            return;
+        }
+    
+        // CRITICAL: use request-driven conversion (vendor prices live here)
+        PriceConverter::maybe_convert_prices( $object, $request, (bool) $creating );
+    
+        // Persist changes made by maybe_convert_prices()
+        $object->save();
+    
+        // If variation, sync parent price so admin Products list isn't £0.00
+        if ( $object instanceof \WC_Product_Variation ) {
+            $parent_id = (int) $object->get_parent_id();
+            if ( $parent_id > 0 ) {
+                wc_delete_product_transients( $parent_id );
+                \WC_Product_Variable::sync( $parent_id );
+            }
+        }
     }
 }
