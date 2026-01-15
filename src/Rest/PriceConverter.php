@@ -169,39 +169,29 @@ final class PriceConverter {
          * ---------------------------------------------------------
          * BULLETPROOF CONVERSION LOGIC (vendor-baseline driven)
          * ---------------------------------------------------------
+         *
+         * CRITICAL SAFETY:
+         * Do NOT update vendor baselines from $product->get_*_price() here.
+         * In non-REST contexts those values are already GBP and will corrupt baselines.
+         * Baselines must only be written from REST payload in maybe_convert_prices().
          */
     
-        // Immutable vendor-currency baselines
         $vendor_regular = $product->get_meta( '_fxd_vendor_regular_price', true );
         $vendor_sale    = $product->get_meta( '_fxd_vendor_sale_price', true );
     
-        // What SyncSpider just wrote (vendor currency)
-        $incoming_regular = $product->get_regular_price();
-        $incoming_sale    = $product->get_sale_price();
-    
-        // Update vendor baselines ONLY from incoming values
-        if ( is_numeric( $incoming_regular ) && (string) $incoming_regular !== (string) $vendor_regular ) {
-            $vendor_regular = (string) $incoming_regular;
-            $product->update_meta_data( '_fxd_vendor_regular_price', $vendor_regular );
-        }
-    
-        if ( is_numeric( $incoming_sale ) && (string) $incoming_sale !== (string) $vendor_sale ) {
-            $vendor_sale = (string) $incoming_sale;
-            $product->update_meta_data( '_fxd_vendor_sale_price', $vendor_sale );
-        }
-    
+        // If we don't have baselines, we can't safely reconvert in this path.
         if ( $vendor_regular === '' && $vendor_sale === '' ) {
             return;
         }
     
         // Convert ONLY from vendor baselines
-        if ( $vendor_regular !== '' ) {
+        if ( $vendor_regular !== '' && is_numeric( $vendor_regular ) ) {
             $gbp_regular = self::convert_to_gbp( (float) $vendor_regular, $rate );
             $product->set_regular_price( $gbp_regular );
             $product->update_meta_data( '_fxd_last_converted_regular_gbp', $gbp_regular );
         }
     
-        if ( $vendor_sale !== '' ) {
+        if ( $vendor_sale !== '' && is_numeric( $vendor_sale ) ) {
             $gbp_sale = self::convert_to_gbp( (float) $vendor_sale, $rate );
             $product->set_sale_price( $gbp_sale );
             $product->update_meta_data( '_fxd_last_converted_sale_gbp', $gbp_sale );
@@ -215,55 +205,51 @@ final class PriceConverter {
         if ( $active_price !== '' ) {
             $product->set_price( $active_price );
         }
-        
+    
         self::store_common_audit_meta( $product, $vendor_currency, $rate );
         $product->save();
     
         /*
          * ---------------------------------------------------------
-         * VARIABLE PARENT PRICE FIX (CRITICAL UX FIX)
+         * VARIABLE PARENT PRICE FIX (admin list shows £0.00)
          * ---------------------------------------------------------
          */
-        // After syncing a variation, ensure the variable parent has a displayable meta price.
-        // Some dashboards (often Dokan/admin lists) read _regular_price directly and show 0 for variable parents otherwise.
         if ( $product instanceof \WC_Product_Variation ) {
             $parent_id = (int) $product->get_parent_id();
-        
+    
             if ( $parent_id > 0 ) {
                 // Clear caches/transients then sync ranges.
                 wc_delete_product_transients( $parent_id );
                 \WC_Product_Variable::sync( $parent_id );
-        
-                // Ensure lookup table is refreshed (depends on WC version).
+    
                 if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
                     wc_update_product_lookup_tables( $parent_id );
                 }
-        
-                // Compute min variation price (variations are already GBP at this point).
+    
                 $parent = wc_get_product( $parent_id );
                 if ( $parent && $parent instanceof \WC_Product_Variable ) {
                     $min_price = $parent->get_variation_price( 'min', true );
-        
+    
                     if ( is_numeric( $min_price ) && (float) $min_price > 0 ) {
                         $min_price_str = number_format( (float) $min_price, wc_get_price_decimals(), '.', '' );
-        
-                        // Write "display" metas for UIs that read parent metas directly.
+    
+                        // For UIs that read parent metas directly.
                         update_post_meta( $parent_id, '_regular_price', $min_price_str );
                         update_post_meta( $parent_id, '_price', $min_price_str );
                     }
-        
+    
                     $parent->save();
                 }
             }
         }
-        
+    
         // Optional: if convert_existing_product() is ever called directly on a variable parent, keep it consistent.
         if ( $product instanceof \WC_Product_Variable ) {
             $pid = (int) $product->get_id();
             if ( $pid > 0 ) {
                 wc_delete_product_transients( $pid );
                 \WC_Product_Variable::sync( $pid );
-        
+    
                 if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
                     wc_update_product_lookup_tables( $pid );
                 }

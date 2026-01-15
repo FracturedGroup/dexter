@@ -49,70 +49,53 @@ final class SyncSpider {
      * @param bool    $update
      */
     public static function maybe_convert_on_save( int $post_id, $post, bool $update ): void {
-        // Defensive: ensure post is a WP_Post.
         if ( ! $post instanceof \WP_Post ) {
             return;
         }
-
-        // Ignore autosaves / revisions.
+    
         if ( wp_is_post_autosave( $post_id ) || wp_is_post_revision( $post_id ) ) {
             return;
         }
-
-        // Ignore trash.
+    
         if ( 'trash' === $post->post_status ) {
             return;
         }
-        
+    
         // If this save is happening during a REST request, let the REST hook handle it.
         if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
             return;
         }
-
-        // Only act on product post type.
-        //if ( 'product' !== $post->post_type ) {
-        //    return;
-        //}
-
+    
         if ( ! in_array( $post->post_type, [ 'product', 'product_variation' ], true ) ) {
             return;
         }
-
-        // Only act when SyncSpider marker meta is present.
+    
         $source = get_post_meta( $post_id, self::META_SOURCE_KEY, true );
         if ( self::META_SOURCE_VALUE !== (string) $source ) {
             return;
         }
-
-        // Avoid double conversion: if already converted, do nothing.
-        //$already = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
-        //if ( ! empty( $already ) ) {
-        //    return;
-        //}
-
-        // Ensure WooCommerce is available.
+    
         if ( ! function_exists( 'wc_get_product' ) ) {
             return;
         }
-
+    
         $product = wc_get_product( $post_id );
         if ( ! $product ) {
             return;
         }
-
-        // Convert "as-is" prices currently stored on the product.
-        // (Step 3 will implement this method in PriceConverter.)
+    
+        // IMPORTANT: this path must NEVER treat current Woo prices as vendor currency.
+        // convert_existing_product() now converts ONLY from stored vendor baselines.
         PriceConverter::convert_existing_product( $product );
     }
-    
-    
+        
     /**
      * Convert prices after Woo REST insert/update.
      *
      * @param \WC_Data         $object
      * @param \WP_REST_Request $request
      * @param bool             $creating
-     */
+     */            
     public static function maybe_convert_on_rest( $object, $request, $creating ): void {
         if ( ! $object instanceof \WC_Product && ! $object instanceof \WC_Product_Variation ) {
             return;
@@ -132,7 +115,7 @@ final class SyncSpider {
             return;
         }
     
-        // CRITICAL: use request-driven conversion (vendor prices live here)
+        // CRITICAL: request-driven conversion (vendor prices are authoritative here)
         PriceConverter::maybe_convert_prices( $object, $request, (bool) $creating );
     
         // Persist changes made by maybe_convert_prices()
@@ -144,6 +127,10 @@ final class SyncSpider {
             if ( $parent_id > 0 ) {
                 wc_delete_product_transients( $parent_id );
                 \WC_Product_Variable::sync( $parent_id );
+    
+                if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
+                    wc_update_product_lookup_tables( $parent_id );
+                }
             }
         }
     }
