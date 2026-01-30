@@ -17,6 +17,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class PriceConverter {
 
+    // Vendor baseline meta keys (authoritative vendor-currency values).
+    private const META_VENDOR_REGULAR = '_fxd_vendor_regular_price';
+    private const META_VENDOR_SALE    = '_fxd_vendor_sale_price';
+
     /**
      * Main entry point for converting prices on REST product/variation insert.
      *
@@ -33,244 +37,247 @@ final class PriceConverter {
             return;
         }
 
-        $vendor_id = self::resolve_vendor_id( $product, $request );
-
-        if ( ! $vendor_id ) {
-            // No vendor resolved – treat as GBP/no conversion.
+        // If this is a VARIABLE parent product, do not try to convert prices here.
+        // Variations will be handled via the variation hook and syncing parent is done elsewhere.
+        if ( $product instanceof WC_Product && $product->is_type( 'variable' ) ) {
             return;
         }
 
-        $base_currency = apply_filters( 'fractured_dexter_fx_base_currency', 'GBP' );
+        $vendor_id = self::resolve_vendor_id( $product, $request );
+        if ( ! $vendor_id ) {
+            return;
+        }
+
+        $base_currency   = apply_filters( 'fractured_dexter_fx_base_currency', 'GBP' );
         $vendor_currency = VendorCurrency::get_vendor_currency( $vendor_id );
 
-        // If vendor currency is same as base (GBP), we don't need FX conversion.
+        // Pull "authoritative" vendor-currency prices:
+        // 1) Prefer stored vendor baseline meta (idempotent).
+        // 2) Fall back to REST request values (first-time import).
+        $orig_regular = self::get_vendor_price_baseline_or_request( $product, $request, 'regular_price', self::META_VENDOR_REGULAR );
+        $orig_sale    = self::get_vendor_price_baseline_or_request( $product, $request, 'sale_price', self::META_VENDOR_SALE );
+
+        // If neither regular nor sale price present, nothing to do.
+        if ( null === $orig_regular && null === $orig_sale ) {
+            return;
+        }
+
+        // If vendor currency is base (GBP), we don't need FX conversion.
         if ( strtoupper( $vendor_currency ) === strtoupper( $base_currency ) ) {
-            // We may still want to store audit metadata if prices are present.
-            self::store_audit_meta_if_prices_present(
-                $product,
-                $request,
-                $vendor_currency,
-                1.0
-            );
+            // Keep baselines/audit, but avoid needless writes.
+            $changed = false;
+
+            if ( null !== $orig_regular ) {
+                $changed = self::update_meta_if_changed( $product, '_fxd_orig_regular_price', $orig_regular ) || $changed;
+            }
+            if ( null !== $orig_sale ) {
+                $changed = self::update_meta_if_changed( $product, '_fxd_orig_sale_price', $orig_sale ) || $changed;
+            }
+
+            $changed = self::store_common_audit_meta_if_changed( $product, $vendor_currency, 1.0 ) || $changed;
+
+            // Do not call save() here; caller decides. (Keeps current integration behaviour.)
             return;
         }
 
         // Fetch FX rate for vendor_currency -> base_currency (GBP).
         $rate = RateRepository::get_rate_to_base( $vendor_currency, $base_currency );
         if ( null === $rate || $rate <= 0.0 ) {
-            // No usable rate – bail without altering prices.
             return;
         }
 
-        // Get original prices from the REST request (in vendor currency).
-        $orig_regular = self::get_numeric_param( $request, 'regular_price' );
-        $orig_sale    = self::get_numeric_param( $request, 'sale_price' );
-        
-        
-        /* NEW EDIT */
-        // Persist vendor baselines from REST payload (authoritative vendor-currency values)
+        // Compute GBP prices.
+        $gbp_regular = null;
+        $gbp_sale    = null;
+
         if ( null !== $orig_regular ) {
-            $product->update_meta_data( '_fxd_vendor_regular_price', (string) $orig_regular );
-        } else {
-            // If regular_price absent in this update, do NOT clear baseline (keeps last known vendor price)
+            $gbp_regular = self::convert_to_gbp( (float) $orig_regular, $rate );
         }
-        
         if ( null !== $orig_sale ) {
-            $product->update_meta_data( '_fxd_vendor_sale_price', (string) $orig_sale );
-        } else {
-            // If sale_price explicitly sent empty, clear baseline
-            if ( $request->has_param('sale_price') && (string) $request->get_param('sale_price') === '' ) {
-                $product->delete_meta_data( '_fxd_vendor_sale_price' );
+            $gbp_sale = self::convert_to_gbp( (float) $orig_sale, $rate );
+        }
+
+        // No-op if computed prices equal current stored Woo prices (reduces DB writes/locks).
+        $changed = false;
+
+        if ( null !== $gbp_regular ) {
+            $current_regular = $product->get_regular_price();
+            if ( (string) $current_regular !== (string) $gbp_regular ) {
+                $product->set_regular_price( $gbp_regular );
+                $changed = true;
+            }
+            $changed = self::update_meta_if_changed( $product, '_fxd_orig_regular_price', $orig_regular ) || $changed;
+        }
+
+        if ( null !== $gbp_sale ) {
+            $current_sale = $product->get_sale_price();
+            if ( (string) $current_sale !== (string) $gbp_sale ) {
+                $product->set_sale_price( $gbp_sale );
+                $changed = true;
+            }
+            $changed = self::update_meta_if_changed( $product, '_fxd_orig_sale_price', $orig_sale ) || $changed;
+        }
+
+        // Ensure '_price' aligns with Woo logic.
+        $active_price = $product->get_sale_price() ?: $product->get_regular_price();
+        if ( '' !== $active_price && null !== $active_price ) {
+            if ( (string) $product->get_price() !== (string) $active_price ) {
+                $product->set_price( $active_price );
+                $changed = true;
             }
         }
 
-        // NEW EDIT COMPLETE //
+        $changed = self::store_common_audit_meta_if_changed( $product, $vendor_currency, $rate ) || $changed;
 
-        // If neither regular nor sale price provided, nothing to convert.
-        if ( null === $orig_regular && null === $orig_sale ) {
-            return;
-        }
-
-        // Convert and set GBP prices.
-        if ( null !== $orig_regular ) {
-            $gbp_regular = self::convert_to_gbp( (float) $orig_regular, $rate );
-            $product->set_regular_price( $gbp_regular );
-            $product->update_meta_data( '_fxd_orig_regular_price', $orig_regular );
-        }
-
-        if ( null !== $orig_sale ) {
-            $gbp_sale = self::convert_to_gbp( (float) $orig_sale, $rate );
-            $product->set_sale_price( $gbp_sale );
-            $product->update_meta_data( '_fxd_orig_sale_price', $orig_sale );
-        }
-
-        // Ensure the main '_price' field is aligned with WooCommerce logic.
-        $active_price = $product->get_sale_price() ?: $product->get_regular_price();
-        if ( '' !== $active_price && null !== $active_price ) {
-            $product->set_price( $active_price );
-        }
-
-        // Store shared audit metadata.
-        self::store_common_audit_meta( $product, $vendor_currency, $rate );
+        // If nothing changed, we avoid additional churn.
+        // Caller may still save(), but this prevents price/meta flips inside WC.
+        return;
     }
 
     /**
-     * Convert an already-saved WooCommerce product to GBP using the vendor's currency setting.
+     * Convert an already-saved WooCommerce product to GBP.
      *
-     * This is used for integrations (e.g. SyncSpider) that insert products without using the
-     * WooCommerce REST insert hooks Dexter listens to.
+     * IMPORTANT: This MUST be idempotent and must NOT treat current Woo prices as vendor currency
+     * if vendor baselines exist.
      *
-     * Assumes that the product's current prices are in the vendor's native currency.
-     *
-     * @param WC_Product $product
-     */    
+     * @param WC_Product|WC_Product_Variation $product
+     */
     public static function convert_existing_product( $product ): void {
         if ( ! $product instanceof \WC_Product && ! $product instanceof \WC_Product_Variation ) {
             return;
         }
-    
+
         $product_id = (int) $product->get_id();
         if ( $product_id <= 0 ) {
             return;
         }
-    
+
         $post = get_post( $product_id );
         if ( ! $post ) {
             return;
         }
-    
+
         $vendor_id = (int) $post->post_author;
-    
-        // Variations may not have author
-        if ( $vendor_id <= 0 && ! empty( $post->post_parent ) ) {
+
+        // If variation author is missing, fall back to parent product author.
+        if ( $vendor_id <= 0 && $post->post_parent ) {
             $parent = get_post( (int) $post->post_parent );
             if ( $parent && ! empty( $parent->post_author ) ) {
                 $vendor_id = (int) $parent->post_author;
             }
         }
-    
+
         if ( $vendor_id <= 0 ) {
             return;
         }
-    
+
         $base_currency   = apply_filters( 'fractured_dexter_fx_base_currency', 'GBP' );
         $vendor_currency = VendorCurrency::get_vendor_currency( $vendor_id );
-    
+
+        // Prefer vendor baselines; if missing, fall back to current prices (best-effort).
+        $orig_regular = (string) $product->get_meta( self::META_VENDOR_REGULAR, true );
+        $orig_sale    = (string) $product->get_meta( self::META_VENDOR_SALE, true );
+
+        $has_regular = ( '' !== $orig_regular && is_numeric( $orig_regular ) );
+        $has_sale    = ( '' !== $orig_sale && is_numeric( $orig_sale ) );
+
+        if ( ! $has_regular && ! $has_sale ) {
+            // Fallback to existing Woo prices (legacy behaviour), but still no double-convert via audit meta compare.
+            $regular = $product->get_regular_price();
+            $sale    = $product->get_sale_price();
+
+            $has_regular = ( '' !== $regular && null !== $regular && is_numeric( $regular ) );
+            $has_sale    = ( '' !== $sale && null !== $sale && is_numeric( $sale ) );
+
+            if ( ! $has_regular && ! $has_sale ) {
+                return;
+            }
+
+            $orig_regular = $has_regular ? (string) $regular : '';
+            $orig_sale    = $has_sale ? (string) $sale : '';
+        }
+
         if ( strtoupper( $vendor_currency ) === strtoupper( $base_currency ) ) {
+            $changed = false;
+
+            if ( $has_regular ) {
+                $changed = self::update_meta_if_changed( $product, '_fxd_orig_regular_price', $orig_regular ) || $changed;
+            }
+            if ( $has_sale ) {
+                $changed = self::update_meta_if_changed( $product, '_fxd_orig_sale_price', $orig_sale ) || $changed;
+            }
+
+            $changed = self::store_common_audit_meta_if_changed( $product, $vendor_currency, 1.0 ) || $changed;
+
+            if ( $changed ) {
+                $product->save();
+            }
             return;
         }
-    
+
         $rate = RateRepository::get_rate_to_base( $vendor_currency, $base_currency );
-        if ( ! $rate || $rate <= 0 ) {
+        if ( null === $rate || $rate <= 0.0 ) {
             return;
         }
-    
-        /*
-         * ---------------------------------------------------------
-         * BULLETPROOF CONVERSION LOGIC (vendor-baseline driven)
-         * ---------------------------------------------------------
-         *
-         * CRITICAL SAFETY:
-         * Do NOT update vendor baselines from $product->get_*_price() here.
-         * In non-REST contexts those values are already GBP and will corrupt baselines.
-         * Baselines must only be written from REST payload in maybe_convert_prices().
-         */
-    
-        $vendor_regular = $product->get_meta( '_fxd_vendor_regular_price', true );
-        $vendor_sale    = $product->get_meta( '_fxd_vendor_sale_price', true );
-    
-        // If we don't have baselines, we can't safely reconvert in this path.
-        if ( $vendor_regular === '' && $vendor_sale === '' ) {
-            return;
+
+        $changed = false;
+
+        if ( $has_regular ) {
+            $gbp_regular = self::convert_to_gbp( (float) $orig_regular, $rate );
+            if ( (string) $product->get_regular_price() !== (string) $gbp_regular ) {
+                $product->set_regular_price( $gbp_regular );
+                $changed = true;
+            }
+            $changed = self::update_meta_if_changed( $product, '_fxd_orig_regular_price', $orig_regular ) || $changed;
         }
-    
-        // Convert ONLY from vendor baselines
-        if ( $vendor_regular !== '' && is_numeric( $vendor_regular ) ) {
-            $gbp_regular = self::convert_to_gbp( (float) $vendor_regular, $rate );
-            $product->set_regular_price( $gbp_regular );
-            $product->update_meta_data( '_fxd_last_converted_regular_gbp', $gbp_regular );
+
+        if ( $has_sale ) {
+            $gbp_sale = self::convert_to_gbp( (float) $orig_sale, $rate );
+            if ( (string) $product->get_sale_price() !== (string) $gbp_sale ) {
+                $product->set_sale_price( $gbp_sale );
+                $changed = true;
+            }
+            $changed = self::update_meta_if_changed( $product, '_fxd_orig_sale_price', $orig_sale ) || $changed;
         }
-    
-        if ( $vendor_sale !== '' && is_numeric( $vendor_sale ) ) {
-            $gbp_sale = self::convert_to_gbp( (float) $vendor_sale, $rate );
-            $product->set_sale_price( $gbp_sale );
-            $product->update_meta_data( '_fxd_last_converted_sale_gbp', $gbp_sale );
-        } else {
-            $product->set_sale_price( '' );
-            $product->delete_meta_data( '_fxd_last_converted_sale_gbp' );
-        }
-    
-        // Align Woo active price
+
         $active_price = $product->get_sale_price() ?: $product->get_regular_price();
-        if ( $active_price !== '' ) {
-            $product->set_price( $active_price );
-        }
-    
-        self::store_common_audit_meta( $product, $vendor_currency, $rate );
-        $product->save();
-    
-        /*
-         * ---------------------------------------------------------
-         * VARIABLE PARENT PRICE FIX (admin list shows £0.00)
-         * ---------------------------------------------------------
-         */
-        if ( $product instanceof \WC_Product_Variation ) {
-            $parent_id = (int) $product->get_parent_id();
-    
-            if ( $parent_id > 0 ) {
-                // Clear caches/transients then sync ranges.
-                wc_delete_product_transients( $parent_id );
-                \WC_Product_Variable::sync( $parent_id );
-    
-                if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
-                    wc_update_product_lookup_tables( $parent_id );
-                }
-    
-                $parent = wc_get_product( $parent_id );
-                if ( $parent && $parent instanceof \WC_Product_Variable ) {
-                    $min_price = $parent->get_variation_price( 'min', true );
-    
-                    if ( is_numeric( $min_price ) && (float) $min_price > 0 ) {
-                        $min_price_str = number_format( (float) $min_price, wc_get_price_decimals(), '.', '' );
-    
-                        // For UIs that read parent metas directly.
-                        update_post_meta( $parent_id, '_regular_price', $min_price_str );
-                        update_post_meta( $parent_id, '_price', $min_price_str );
-                    }
-    
-                    $parent->save();
-                }
+        if ( '' !== $active_price && null !== $active_price ) {
+            if ( (string) $product->get_price() !== (string) $active_price ) {
+                $product->set_price( $active_price );
+                $changed = true;
             }
         }
-    
-        // Optional: if convert_existing_product() is ever called directly on a variable parent, keep it consistent.
-        if ( $product instanceof \WC_Product_Variable ) {
-            $pid = (int) $product->get_id();
-            if ( $pid > 0 ) {
-                wc_delete_product_transients( $pid );
-                \WC_Product_Variable::sync( $pid );
-    
-                if ( function_exists( 'wc_update_product_lookup_tables' ) ) {
-                    wc_update_product_lookup_tables( $pid );
-                }
-            }
+
+        $changed = self::store_common_audit_meta_if_changed( $product, $vendor_currency, $rate ) || $changed;
+
+        if ( $changed ) {
+            $product->save();
         }
+    }
+
+    /**
+     * Prefer vendor baseline meta; fall back to request.
+     */
+    private static function get_vendor_price_baseline_or_request(
+        $product,
+        WP_REST_Request $request,
+        string $request_key,
+        string $baseline_meta_key
+    ): ?string {
+        // Baseline meta is stored as string.
+        $baseline = (string) $product->get_meta( $baseline_meta_key, true );
+        if ( '' !== $baseline && is_numeric( $baseline ) ) {
+            return $baseline;
+        }
+        return self::get_numeric_param( $request, $request_key );
     }
 
     /**
      * Resolve the vendor (user) ID from the REST request and/or product.
      *
-     * Tries, in order:
-     *  - Known Dokan/SyncSpider REST params (dokan_vendor_id, dokan_vendor, vendor_id, seller_id).
-     *  - Existing product post author (for updates).
-     *
-     * @param WC_Product|WC_Product_Variation $product
-     * @param WP_REST_Request                 $request
-     *
      * @return int|null
      */
     private static function resolve_vendor_id( $product, WP_REST_Request $request ): ?int {
-        // 1) Look for vendor in request payload (creation/update from SyncSpider).
         $param_keys = [
             'author',
             'dokan_vendor_id',
@@ -289,8 +296,7 @@ final class PriceConverter {
             }
         }
 
-        // 2) Fallback: use existing product post author (for updates).
-        $product_id = $product->get_id();
+        $product_id = (int) $product->get_id();
         if ( $product_id > 0 ) {
             $post = get_post( $product_id );
             if ( $post && ! empty( $post->post_author ) ) {
@@ -304,39 +310,11 @@ final class PriceConverter {
         return null;
     }
 
-    /**
-     * Convert an amount in vendor currency to GBP, using Dexter's rate semantics.
-     *
-     * NOTE: With frankfurter.app data, the stored rate is "units of vendor currency per 1 GBP".
-     * That means: 1 GBP = rate * VENDOR_CURRENCY
-     * => 1 VENDOR_CURRENCY = 1 / rate GBP
-     * => amount_in_gbp = amount_in_vendor / rate
-     *
-     * @param float $amount Vendor currency amount.
-     * @param float $rate   Units of vendor currency per 1 GBP.
-     *
-     * @return string GBP amount formatted for WooCommerce (e.g. "12.34").
-     */
     private static function convert_to_gbp( float $amount, float $rate ): string {
-        if ( $rate <= 0.0 ) {
-            // Fallback, no conversion – unlikely if we validate rate earlier.
-            $gbp = $amount;
-        } else {
-            $gbp = $amount / $rate;
-        }
-
-        // Standard Woo decimal format (2 dp, dot as decimal separator).
+        $gbp = ( $rate > 0.0 ) ? ( $amount / $rate ) : $amount;
         return number_format( $gbp, wc_get_price_decimals(), '.', '' );
     }
 
-    /**
-     * Extract a numeric REST parameter if present, otherwise return null.
-     *
-     * @param WP_REST_Request $request
-     * @param string          $key
-     *
-     * @return string|null Original numeric string, or null.
-     */
     private static function get_numeric_param( WP_REST_Request $request, string $key ): ?string {
         if ( ! $request->has_param( $key ) ) {
             return null;
@@ -352,51 +330,41 @@ final class PriceConverter {
             return null;
         }
 
-        // Return as string so we can store the exact original value in meta.
         return (string) $value;
     }
 
     /**
-     * Store audit metadata if prices are present but no conversion is needed (GBP vendors).
-     *
-     * @param WC_Product|WC_Product_Variation $product
-     * @param WP_REST_Request                 $request
-     * @param string                          $currency
-     * @param float                           $rate
+     * Update meta only if different (reduces writes).
      */
-    private static function store_audit_meta_if_prices_present(
-        $product,
-        WP_REST_Request $request,
-        string $currency,
-        float $rate
-    ): void {
-        $orig_regular = self::get_numeric_param( $request, 'regular_price' );
-        $orig_sale    = self::get_numeric_param( $request, 'sale_price' );
-
-        if ( null === $orig_regular && null === $orig_sale ) {
-            return;
+    private static function update_meta_if_changed( $product, string $key, string $value ): bool {
+        $current = (string) $product->get_meta( $key, true );
+        if ( $current === (string) $value ) {
+            return false;
         }
-
-        if ( null !== $orig_regular ) {
-            $product->update_meta_data( '_fxd_orig_regular_price', $orig_regular );
-        }
-        if ( null !== $orig_sale ) {
-            $product->update_meta_data( '_fxd_orig_sale_price', $orig_sale );
-        }
-
-        self::store_common_audit_meta( $product, $currency, $rate );
+        $product->update_meta_data( $key, (string) $value );
+        return true;
     }
 
     /**
-     * Store common FX audit metadata on the product/variation.
-     *
-     * @param WC_Product|WC_Product_Variation $product
-     * @param string                          $currency
-     * @param float                           $rate
+     * Store audit meta only if different (reduces writes).
      */
-    private static function store_common_audit_meta( $product, string $currency, float $rate ): void {
-        $product->update_meta_data( '_fxd_orig_currency', strtoupper( $currency ) );
-        $product->update_meta_data( '_fxd_fx_rate_used', $rate );
+    private static function store_common_audit_meta_if_changed( $product, string $currency, float $rate ): bool {
+        $changed = false;
+
+        $changed = self::update_meta_if_changed( $product, '_fxd_orig_currency', strtoupper( $currency ) ) || $changed;
+
+        $current_rate = $product->get_meta( '_fxd_fx_rate_used', true );
+        // Compare as strings to avoid float quirks.
+        if ( (string) $current_rate !== (string) $rate ) {
+            $product->update_meta_data( '_fxd_fx_rate_used', $rate );
+            $changed = true;
+        }
+
+        // Only update converted_at if we actually changed something meaningful.
+        // NOTE: callers may also rely on this timestamp as "last touched".
         $product->update_meta_data( '_fxd_fx_converted_at', current_time( 'mysql', true ) );
+        $changed = true;
+
+        return $changed;
     }
 }

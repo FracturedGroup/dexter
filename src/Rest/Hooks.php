@@ -2,6 +2,8 @@
 
 namespace Fractured\Dexter\Rest;
 
+use Fractured\Dexter\Rest\PriceConverter;
+
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -10,6 +12,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Registers WooCommerce REST hooks that Dexter uses to convert prices.
  */
 final class Hooks {
+
+    /**
+     * SyncSpider marker meta.
+     */
+    private const META_SOURCE_KEY   = '_fxd_import_source';
+    private const META_SOURCE_VALUE = 'syncspider';
 
     /**
      * Bootstrap REST hooks.
@@ -33,6 +41,17 @@ final class Hooks {
     }
 
     /**
+     * Only convert for SyncSpider-sourced objects.
+     */
+    private static function is_syncspider_source( int $post_id ): bool {
+        if ( $post_id <= 0 ) {
+            return false;
+        }
+        $source = get_post_meta( $post_id, self::META_SOURCE_KEY, true );
+        return self::META_SOURCE_VALUE === (string) $source;
+    }
+
+    /**
      * Handle conversion for main product objects.
      *
      * @param \WC_Product      $product
@@ -42,7 +61,16 @@ final class Hooks {
      * @return \WC_Product
      */
     public static function handle_product( $product, $request, $creating ) {
-        PriceConverter::maybe_convert_prices( $product, $request, $creating );
+        if ( ! $product instanceof \WC_Product || ! $request instanceof \WP_REST_Request ) {
+            return $product;
+        }
+
+        $post_id = (int) $product->get_id();
+        if ( ! self::is_syncspider_source( $post_id ) ) {
+            return $product;
+        }
+
+        PriceConverter::maybe_convert_prices( $product, $request, (bool) $creating );
         return $product;
     }
 
@@ -56,7 +84,16 @@ final class Hooks {
      * @return \WC_Product_Variation
      */
     public static function handle_variation( $variation, $request, $creating ) {
-        PriceConverter::maybe_convert_prices( $variation, $request, $creating );
+        if ( ! $variation instanceof \WC_Product_Variation || ! $request instanceof \WP_REST_Request ) {
+            return $variation;
+        }
+
+        $post_id = (int) $variation->get_id();
+        if ( ! self::is_syncspider_source( $post_id ) ) {
+            return $variation;
+        }
+
+        PriceConverter::maybe_convert_prices( $variation, $request, (bool) $creating );
         return $variation;
     }
 }
