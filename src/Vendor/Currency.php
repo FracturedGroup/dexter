@@ -85,6 +85,7 @@ final class Currency {
                 'CAD' => __( 'CAD – Canadian Dollar', 'fractured-dexter' ),
                 'AED' => __( 'AED – UAE Dirham', 'fractured-dexter' ),
                 'INR' => __( 'INR – Indian Rupee', 'fractured-dexter' ),
+                'AUD' => __( 'AUD – Australian Dollar', 'fractured-dexter' ),
             ]
         );
         ?>
@@ -140,6 +141,7 @@ final class Currency {
                 'CAD' => __( 'CAD – Canadian Dollar', 'fractured-dexter' ),
                 'AED' => __( 'AED – UAE Dirham', 'fractured-dexter' ),
                 'INR' => __( 'INR – Indian Rupee', 'fractured-dexter' ),
+                'AUD' => __( 'AUD – Australian Dollar', 'fractured-dexter' ),
             ]
         );
 

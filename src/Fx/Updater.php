@@ -78,7 +78,7 @@ final class Updater {
         // Currencies we actually care about.
         $target_currencies = apply_filters(
             'fractured_dexter_fx_target_currencies',
-            [ 'GBP', 'EUR', 'CAD', 'AED', 'INR' ]
+            [ 'GBP', 'EUR', 'CAD', 'AED', 'INR', 'AUD' ]
         );
 
         // Normalise and remove base from targets.

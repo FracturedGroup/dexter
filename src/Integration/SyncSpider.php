@@ -3,6 +3,7 @@
 namespace Fractured\Dexter\Integration;
 
 use Fractured\Dexter\Rest\PriceConverter;
+use Fractured\Dexter\Vendor\Currency as VendorCurrency;
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -11,8 +12,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * SyncSpider integration.
  *
- * Converts prices ONLY for SyncSpider imports,
- * and NEVER during REST requests (REST has its own hook).
+ * Converts prices ONLY for SyncSpider imports.
+ *
+ * Normal rule:
+ *  - Never run during REST (REST path handled by Dexter REST hooks).
+ *
+ * Surgical safety-net:
+ *  - If SyncSpider writes prices via meta during REST in a way that bypasses Dexter REST conversion,
+ *    and the product is still unconverted, then convert once here.
  */
 final class SyncSpider {
 
@@ -32,8 +39,7 @@ final class SyncSpider {
     }
 
     /**
-     * Convert imported product prices to GBP on save,
-     * but ONLY for non-REST, SyncSpider-originated saves.
+     * Convert imported product prices to GBP on save.
      */
     public static function maybe_convert_on_save( int $post_id, $post, bool $update ): void {
         if ( ! $post instanceof \WP_Post ) {
@@ -46,11 +52,6 @@ final class SyncSpider {
             wp_is_post_revision( $post_id ) ||
             'trash' === $post->post_status
         ) {
-            return;
-        }
-
-        // 🚫 NEVER run during REST (REST path handled elsewhere)
-        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
             return;
         }
 
@@ -70,17 +71,88 @@ final class SyncSpider {
         }
         self::$processing[ $post_id ] = true;
 
-        if ( ! function_exists( 'wc_get_product' ) ) {
-            return;
-        }
+        try {
+            /**
+             * Default behaviour: do not run during REST.
+             * REST conversion is handled by Dexter REST hooks.
+             */
+            $is_rest = ( defined( 'REST_REQUEST' ) && REST_REQUEST );
 
-        $product = wc_get_product( $post_id );
-        if ( ! $product ) {
-            return;
-        }
+            if ( $is_rest ) {
+                // If already converted (or clearly audited), do nothing.
+                $converted_at = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
+                if ( ! empty( $converted_at ) ) {
+                    return;
+                }
 
-        // Converts ONLY from vendor baselines
-        // Idempotent + guarded
-        PriceConverter::convert_existing_product( $product );
+                $orig_currency = get_post_meta( $post_id, '_fxd_orig_currency', true );
+                if ( ! empty( $orig_currency ) ) {
+                    return;
+                }
+
+                // If there is no numeric price in DB, there's nothing to convert.
+                $regular = get_post_meta( $post_id, '_regular_price', true );
+                $active  = get_post_meta( $post_id, '_price', true );
+
+                $has_numeric_price =
+                    ( '' !== $regular && null !== $regular && is_numeric( $regular ) ) ||
+                    ( '' !== $active  && null !== $active  && is_numeric( $active ) );
+
+                if ( ! $has_numeric_price ) {
+                    return;
+                }
+
+                // Only run this safety-net for non-GBP vendors.
+                $vendor_id = (int) $post->post_author;
+
+                // Variations can sometimes have odd authors; fall back to parent author.
+                if ( $vendor_id <= 0 && ! empty( $post->post_parent ) ) {
+                    $parent = get_post( (int) $post->post_parent );
+                    if ( $parent instanceof \WP_Post && ! empty( $parent->post_author ) ) {
+                        $vendor_id = (int) $parent->post_author;
+                    }
+                }
+
+                if ( $vendor_id <= 0 ) {
+                    return;
+                }
+
+                $base_currency   = apply_filters( 'fractured_dexter_fx_base_currency', 'GBP' );
+                $vendor_currency = VendorCurrency::get_vendor_currency( $vendor_id );
+
+                if ( strtoupper( (string) $vendor_currency ) === strtoupper( (string) $base_currency ) ) {
+                    return; // GBP vendor — no FX conversion needed.
+                }
+
+                // ✅ Safety-net conversion (runs only in this unconverted REST edge case)
+                if ( ! function_exists( 'wc_get_product' ) ) {
+                    return;
+                }
+
+                $product = wc_get_product( $post_id );
+                if ( ! $product ) {
+                    return;
+                }
+
+                PriceConverter::convert_existing_product( $product );
+                return;
+            }
+
+            // Non-REST: standard path for SyncSpider-originated saves.
+            if ( ! function_exists( 'wc_get_product' ) ) {
+                return;
+            }
+
+            $product = wc_get_product( $post_id );
+            if ( ! $product ) {
+                return;
+            }
+
+            PriceConverter::convert_existing_product( $product );
+
+        } finally {
+            // Keep the guard set for the remainder of the request (prevents re-entrancy storms).
+            // No unset here by design.
+        }
     }
 }
