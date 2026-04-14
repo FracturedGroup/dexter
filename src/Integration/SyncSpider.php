@@ -20,6 +20,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Surgical safety-net:
  *  - If SyncSpider writes prices via meta during REST in a way that bypasses Dexter REST conversion,
  *    and the product is still unconverted, then convert once here.
+ *
+ * Non-REST guard:
+ *  - Only convert on non-REST save if the product has never been FX-audited yet.
+ *    This prevents accidental reconversion when unrelated actions (for example admin/vendor saves)
+ *    touch already-converted SyncSpider products.
  */
 final class SyncSpider {
 
@@ -138,7 +143,20 @@ final class SyncSpider {
                 return;
             }
 
-            // Non-REST: standard path for SyncSpider-originated saves.
+            /**
+             * Non-REST guard:
+             * Do NOT reconvert products that already have Dexter FX audit meta.
+             * This prevents unrelated non-REST saves from reinterpreting legacy source values
+             * under the vendor's current currency setting.
+             */
+            $converted_at  = get_post_meta( $post_id, '_fxd_fx_converted_at', true );
+            $orig_currency = get_post_meta( $post_id, '_fxd_orig_currency', true );
+
+            if ( ! empty( $converted_at ) || ! empty( $orig_currency ) ) {
+                return;
+            }
+
+            // Non-REST: first-time SyncSpider-originated save only.
             if ( ! function_exists( 'wc_get_product' ) ) {
                 return;
             }

@@ -86,6 +86,7 @@ final class Currency {
                 'AED' => __( 'AED – UAE Dirham', 'fractured-dexter' ),
                 'INR' => __( 'INR – Indian Rupee', 'fractured-dexter' ),
                 'AUD' => __( 'AUD – Australian Dollar', 'fractured-dexter' ),
+                'USD' => __( 'USD – US Dollar', 'fractured-dexter' ),
             ]
         );
         ?>
@@ -142,6 +143,7 @@ final class Currency {
                 'AED' => __( 'AED – UAE Dirham', 'fractured-dexter' ),
                 'INR' => __( 'INR – Indian Rupee', 'fractured-dexter' ),
                 'AUD' => __( 'AUD – Australian Dollar', 'fractured-dexter' ),
+                'USD' => __( 'USD – US Dollar', 'fractured-dexter' ),
             ]
         );
 
