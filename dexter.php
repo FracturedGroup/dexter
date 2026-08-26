@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Dexter – FX Layer for Fractured
- * Plugin URI: https://www.fracturedstore.com
+ * Plugin URI: https://www.fractured.co
  * Description: Central currency conversion layer for Fractured’s multi-currency vendors. Converts imported prices to GBP while storing original prices and FX rates.
- * Version: 1.0.1
+ * Version: 2.0.0
  * Author: Fractured
  * Text Domain: fractured-dexter
  */
@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'FRACTURED_DEXTER_VERSION', '1.0.1' );
+define( 'FRACTURED_DEXTER_VERSION', '2.0.0' );
 define( 'FRACTURED_DEXTER_FILE', __FILE__ );
 define( 'FRACTURED_DEXTER_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FRACTURED_DEXTER_URL', plugin_dir_url( __FILE__ ) );

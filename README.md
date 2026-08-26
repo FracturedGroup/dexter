@@ -224,7 +224,7 @@ You can test Dexter end-to-end without SyncSpider by using Postman or curl.
 
 **POST** to:
 ```text
-https://preprod.fracturedstore.com/wp-json/wc/v3/products
+https://preprod.fractured.co/wp-json/wc/v3/products
 ```
 
 Body (raw JSON):

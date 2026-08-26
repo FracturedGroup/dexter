@@ -7,6 +7,7 @@ use Fractured\Dexter\Fx\Updater as FxUpdater;
 use Fractured\Dexter\Vendor\Currency as VendorCurrency;
 use Fractured\Dexter\Rest\Hooks as RestHooks;
 use Fractured\Dexter\Integration\SyncSpider as SyncSpiderIntegration;
+use Fractured\Dexter\Integration\JsonPriceSync as JsonPriceSync;
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -32,6 +33,9 @@ final class Plugin {
 
         // SyncSpider import integration (marker-based conversion on save).
         SyncSpiderIntegration::init();
+
+        // Vendor-specific JSON price correction layer.
+        JsonPriceSync::init();
 
         // Admin UI.
         if ( is_admin() ) {
